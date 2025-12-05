@@ -2,26 +2,54 @@
   "vhost": "kade",
 
   "telemetry": {
-    "exchange": "telemetry",
-    "queue": "telemetry.to-aws",
-    "routing_key": "#"
+      "exchange": "telemetry",
+      "queues":
+      [
+	  {
+	      "name": "hammerspace.to-aws",
+	      "routing_key": "hammerspace.#"
+	  },
+	  {
+	      "name": "catalog.to-aws",
+	      "routing_key": "catalog.#"
+	  }
+      ]
   },
 
   "events": {
-    "exchange": "events",
-    "queue": "events.to-aws",
-    "routing_key": "#"
+      "exchange": "events",
+      "queues":
+      [
+	  {
+	      "name": "events.to-aws",
+	      "routing_key": "#"
+	  }
+      ]
   },
 
   "performance": {
-    "exchange": "performance",
-    "queue": "performance.to-aws",
-    "routing_key": "#"
+      "exchange": "performance",
+      "queues":
+      [
+	  {
+	      "performance.to-aws",
+	      "routing_key": "#"
+	  }
+      ]
   },
 
   "commands": {
-    "exchange": "commands",
-    "queue": "commands.from-aws",
-    "routing_key": "#"
+      "exchange": "commands",
+      "queues":
+      [
+	  {
+	      "hammerspace.from-aws",
+	      "routing_key": "hammerspace.#"
+	  },
+	  {
+	      "catalog.from-aws",
+	      "routing_key": "catalog.#"
+	  }
+      ]
   }
 }
