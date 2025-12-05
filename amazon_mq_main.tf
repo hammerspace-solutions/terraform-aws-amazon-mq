@@ -166,15 +166,12 @@ resource "local_file" "site_definitions" {
     ]
 
     # ------------------------------------------------------------
-    # exchanges / queues / bindings
-    # - exchanges: still 1 per logical config (telemetry, events, etc.)
-    # - queues/bindings: now support multiple queues per exchange
-    #   via cfg.queues[], with backward-compat fallback to cfg.queue
+    # exchanges:
+    #   remote side needs all four exchanges, but only commands
+    #   gets queues/bindings here.
     # ------------------------------------------------------------
-
     exchanges = [
-      for name, cfg in each.value :
-      {
+      for name, cfg in each.value : {
         name        = cfg.exchange
         vhost       = "/"
         type        = "topic"
@@ -185,68 +182,71 @@ resource "local_file" "site_definitions" {
       } if name != "vhost"
     ]
 
+    # ------------------------------------------------------------
+    # queues (remote):
+    #   - NO telemetry/events/performance queues (they go to central).
+    #   - ONLY commands queues (hammerspace.from-aws, catalog.from-aws, etc.)
+    # ------------------------------------------------------------
     queues = flatten([
       for name, cfg in each.value : [
-        for q in (
-          can(cfg.queues)
-          ? cfg.queues
-          : [{
-              name        = cfg.queue
-              routing_key = lookup(cfg, "routing_key", "#")
-            }]
-        ) : {
+        for q in (name == "commands" && can(cfg.queues) ? cfg.queues : []) : {
           name        = q.name
           vhost       = "/"
           durable     = true
           auto_delete = false
           arguments   = {}
         }
-      ] if name != "vhost"
+      ]
     ])
 
+    # ------------------------------------------------------------
+    # bindings (remote):
+    #   - same: only for commands queues.
+    #   - routing key is per-queue (q.routing_key).
+    # ------------------------------------------------------------
     bindings = flatten([
       for name, cfg in each.value : [
-        for q in (
-          can(cfg.queues)
-          ? cfg.queues
-          : [{
-              name        = cfg.queue
-              routing_key = lookup(cfg, "routing_key", "#")
-            }]
-        ) : {
-          source           = cfg.exchange
+        for q in (name == "commands" && can(cfg.queues) ? cfg.queues : []) : {
+          source           = cfg.exchange  # "commands"
           vhost            = "/"
           destination      = q.name
           destination_type = "queue"
-          routing_key      = lookup(q, "routing_key", lookup(cfg, "routing_key", "#"))
+          routing_key      = lookup(q, "routing_key", "#")
           arguments        = {}
         }
-      ] if name != "vhost"
+      ]
     ])
 
     # ------------------------------------------------------------
-    # Shovels:
-    #   telemetry_to_aws, events_to_aws, performance_to_aws  (site -> central)
-    #   commands_from_aws                                    (central -> site)
+    # Shovels (remote rabbit):
     #
-    # For each exchange, we:
-    #   - if cfg.queues exists: use the FIRST queue in that list as the
-    #     "bridge" queue (q[0])
-    #   - else: use the legacy cfg.queue / cfg.routing_key
+    #  - telemetry_to_aws, events_to_aws, performance_to_aws:
+    #      src-exchange = telemetry/events/performance  (remote)
+    #      src-exchange-key = "#" (or tighten later)
+    #      dest-exchange = same exchange on central
+    #      NO dest-exchange-key => original routing key preserved
+    #
+    #  - commands_from_aws:
+    #      src-exchange = commands (central)
+    #      src-exchange-key = "#"
+    #      dest-exchange = commands (remote)
+    #      NO dest-exchange-key => original routing key preserved
+    #
+    #  Commands queues & bindings at the remote site determine
+    #  which queue gets which commands.* messages.
     # ------------------------------------------------------------
-
     parameters = [
       {
         vhost     = "/"
         component = "shovel"
         name      = "telemetry_to_aws"
         value = {
-          "src-uri"   = "amqp://${urlencode(var.site_username)}:${urlencode(var.site_password)}@localhost:5672/%2F"
-          "src-queue" = can(each.value.telemetry.queues) ? each.value.telemetry.queues[0].name : each.value.telemetry.queue
+          "src-uri"          = "amqp://${urlencode(var.site_username)}:${urlencode(var.site_password)}@localhost:5672/%2F"
+          "src-exchange"     = each.value.telemetry.exchange
+          "src-exchange-key" = "#"
 
-          "dest-uri"          = "amqps://${urlencode(var.admin_username)}:${urlencode(var.admin_password)}@${local.central_amqps_host}/${urlencode(each.value.vhost)}?verify=verify_none"
-          "dest-exchange"     = each.value.telemetry.exchange
-          "dest-exchange-key" = can(each.value.telemetry.queues) ? lookup(each.value.telemetry.queues[0], "routing_key", lookup(each.value.telemetry, "routing_key", "#")) : lookup(each.value.telemetry, "routing_key", "#")
+          "dest-uri"      = "amqps://${urlencode(var.admin_username)}:${urlencode(var.admin_password)}@${local.central_amqps_host}/${urlencode(each.value.vhost)}?verify=verify_none"
+          "dest-exchange" = each.value.telemetry.exchange
 
           "ack-mode"        = "on-confirm"
           "reconnect-delay" = 5
@@ -257,12 +257,12 @@ resource "local_file" "site_definitions" {
         component = "shovel"
         name      = "events_to_aws"
         value = {
-          "src-uri"   = "amqp://${urlencode(var.site_username)}:${urlencode(var.site_password)}@localhost:5672/%2F"
-          "src-queue" = can(each.value.events.queues) ? each.value.events.queues[0].name : each.value.events.queue
+          "src-uri"          = "amqp://${urlencode(var.site_username)}:${urlencode(var.site_password)}@localhost:5672/%2F"
+          "src-exchange"     = each.value.events.exchange
+          "src-exchange-key" = "#"
 
-          "dest-uri"          = "amqps://${urlencode(var.admin_username)}:${urlencode(var.admin_password)}@${local.central_amqps_host}/${urlencode(each.value.vhost)}?verify=verify_none"
-          "dest-exchange"     = each.value.events.exchange
-          "dest-exchange-key" = can(each.value.events.queues) ? lookup(each.value.events.queues[0], "routing_key", lookup(each.value.events, "routing_key", "#")) : lookup(each.value.events, "routing_key", "#")
+          "dest-uri"      = "amqps://${urlencode(var.admin_username)}:${urlencode(var.admin_password)}@${local.central_amqps_host}/${urlencode(each.value.vhost)}?verify=verify_none"
+          "dest-exchange" = each.value.events.exchange
 
           "ack-mode"        = "on-confirm"
           "reconnect-delay" = 5
@@ -273,12 +273,12 @@ resource "local_file" "site_definitions" {
         component = "shovel"
         name      = "performance_to_aws"
         value = {
-          "src-uri"   = "amqp://${urlencode(var.site_username)}:${urlencode(var.site_password)}@localhost:5672/%2F"
-          "src-queue" = can(each.value.performance.queues) ? each.value.performance.queues[0].name : each.value.performance.queue
+          "src-uri"          = "amqp://${urlencode(var.site_username)}:${urlencode(var.site_password)}@localhost:5672/%2F"
+          "src-exchange"     = each.value.performance.exchange
+          "src-exchange-key" = "#"
 
-          "dest-uri"          = "amqps://${urlencode(var.admin_username)}:${urlencode(var.admin_password)}@${local.central_amqps_host}/${urlencode(each.value.vhost)}?verify=verify_none"
-          "dest-exchange"     = each.value.performance.exchange
-          "dest-exchange-key" = can(each.value.performance.queues) ? lookup(each.value.performance.queues[0], "routing_key", lookup(each.value.performance, "routing_key", "#")) : lookup(each.value.performance, "routing_key", "#")
+          "dest-uri"      = "amqps://${urlencode(var.admin_username)}:${urlencode(var.admin_password)}@${local.central_amqps_host}/${urlencode(each.value.vhost)}?verify=verify_none"
+          "dest-exchange" = each.value.performance.exchange
 
           "ack-mode"        = "on-confirm"
           "reconnect-delay" = 5
@@ -292,11 +292,11 @@ resource "local_file" "site_definitions" {
           # Source is the central AWS broker, commands exchange in the site's vhost
           "src-uri"          = "amqps://${urlencode(var.admin_username)}:${urlencode(var.admin_password)}@${local.central_amqps_host}/${urlencode(each.value.vhost)}?verify=verify_none"
           "src-exchange"     = each.value.commands.exchange
-          "src-exchange-key" = can(each.value.commands.queues) ? lookup(each.value.commands.queues[0], "routing_key", lookup(each.value.commands, "routing_key", "#")) : lookup(each.value.commands, "routing_key", "#")
+          "src-exchange-key" = "#"
 
-          # Destination is the local site broker, commands.from-aws queue on /
-          "dest-uri"   = "amqp://${urlencode(var.site_username)}:${urlencode(var.site_password)}@localhost:5672/%2F"
-          "dest-queue" = can(each.value.commands.queues) ? each.value.commands.queues[0].name : each.value.commands.queue
+          # Destination is the local site broker, commands exchange on "/"
+          "dest-uri"      = "amqp://${urlencode(var.site_username)}:${urlencode(var.site_password)}@localhost:5672/%2F"
+          "dest-exchange" = each.value.commands.exchange
 
           "ack-mode"        = "on-confirm"
           "reconnect-delay" = 5
