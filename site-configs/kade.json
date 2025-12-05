@@ -1,0 +1,27 @@
+{
+  "vhost": "kade",
+
+  "telemetry": {
+    "exchange": "telemetry",
+    "queue": "telemetry.to-aws",
+    "routing_key": "#"
+  },
+
+  "events": {
+    "exchange": "events",
+    "queue": "events.to-aws",
+    "routing_key": "#"
+  },
+
+  "performance": {
+    "exchange": "performance",
+    "queue": "performance.to-aws",
+    "routing_key": "#"
+  },
+
+  "commands": {
+    "exchange": "commands",
+    "queue": "commands.from-aws",
+    "routing_key": "#"
+  }
+}
