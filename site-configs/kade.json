@@ -5,14 +5,8 @@
       "exchange": "telemetry",
       "queues":
       [
-	  {
-	      "name": "hammerspace.to-aws",
-	      "routing_key": "hammerspace.#"
-	  },
-	  {
-	      "name": "catalog.to-aws",
-	      "routing_key": "catalog.#"
-	  }
+	  { "name": "hammerspace.to-aws", "routing_key": "hammerspace.#" },
+	  { "name": "catalog.to-aws", "routing_key": "catalog.#" }
       ]
   },
 
@@ -20,10 +14,7 @@
       "exchange": "events",
       "queues":
       [
-	  {
-	      "name": "events.to-aws",
-	      "routing_key": "#"
-	  }
+	  { "name": "events.to-aws", "routing_key": "#" }
       ]
   },
 
@@ -31,10 +22,7 @@
       "exchange": "performance",
       "queues":
       [
-	  {
-	      "performance.to-aws",
-	      "routing_key": "#"
-	  }
+	  { "name": "performance.to-aws", "routing_key": "#" }
       ]
   },
 
@@ -42,14 +30,8 @@
       "exchange": "commands",
       "queues":
       [
-	  {
-	      "hammerspace.from-aws",
-	      "routing_key": "hammerspace.#"
-	  },
-	  {
-	      "catalog.from-aws",
-	      "routing_key": "catalog.#"
-	  }
+	  { "name": "hammerspace.from-aws", "routing_key": "hammerspace.#" },
+	  { "name": "catalog.from-aws", "routing_key": "catalog.#" }
       ]
   }
 }
