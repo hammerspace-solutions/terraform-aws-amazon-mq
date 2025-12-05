@@ -242,15 +242,11 @@ resource "local_file" "site_definitions" {
         name      = "telemetry_to_aws"
         value = {
           "src-uri"   = "amqp://${urlencode(var.site_username)}:${urlencode(var.site_password)}@localhost:5672/%2F"
-          "src-queue" = (can(each.value.telemetry.queues)
-            ? each.value.telemetry.queues[0].name
-            : each.value.telemetry.queue)
+          "src-queue" = can(each.value.telemetry.queues) ? each.value.telemetry.queues[0].name : each.value.telemetry.queue
 
           "dest-uri"          = "amqps://${urlencode(var.admin_username)}:${urlencode(var.admin_password)}@${local.central_amqps_host}/${urlencode(each.value.vhost)}?verify=verify_none"
           "dest-exchange"     = each.value.telemetry.exchange
-          "dest-exchange-key" = (can(each.value.telemetry.queues)
-            ? lookup(each.value.telemetry.queues[0], "routing_key", lookup(each.value.telemetry, "routing_key", "#"))
-            : lookup(each.value.telemetry, "routing_key", "#"))
+          "dest-exchange-key" = can(each.value.telemetry.queues) ? lookup(each.value.telemetry.queues[0], "routing_key", lookup(each.value.telemetry, "routing_key", "#")) : lookup(each.value.telemetry, "routing_key", "#")
 
           "ack-mode"        = "on-confirm"
           "reconnect-delay" = 5
@@ -262,15 +258,11 @@ resource "local_file" "site_definitions" {
         name      = "events_to_aws"
         value = {
           "src-uri"   = "amqp://${urlencode(var.site_username)}:${urlencode(var.site_password)}@localhost:5672/%2F"
-          "src-queue" = can(each.value.events.queues)
-            ? each.value.events.queues[0].name
-            : each.value.events.queue
+          "src-queue" = can(each.value.events.queues) ? each.value.events.queues[0].name : each.value.events.queue
 
           "dest-uri"          = "amqps://${urlencode(var.admin_username)}:${urlencode(var.admin_password)}@${local.central_amqps_host}/${urlencode(each.value.vhost)}?verify=verify_none"
           "dest-exchange"     = each.value.events.exchange
-          "dest-exchange-key" = (can(each.value.events.queues)
-            ? lookup(each.value.events.queues[0], "routing_key", lookup(each.value.events, "routing_key", "#"))
-            : lookup(each.value.events, "routing_key", "#"))
+          "dest-exchange-key" = can(each.value.events.queues) ? lookup(each.value.events.queues[0], "routing_key", lookup(each.value.events, "routing_key", "#")) : lookup(each.value.events, "routing_key", "#")
 
           "ack-mode"        = "on-confirm"
           "reconnect-delay" = 5
@@ -282,15 +274,11 @@ resource "local_file" "site_definitions" {
         name      = "performance_to_aws"
         value = {
           "src-uri"   = "amqp://${urlencode(var.site_username)}:${urlencode(var.site_password)}@localhost:5672/%2F"
-          "src-queue" = (can(each.value.performance.queues)
-            ? each.value.performance.queues[0].name
-            : each.value.performance.queue)
+          "src-queue" = can(each.value.performance.queues) ? each.value.performance.queues[0].name : each.value.performance.queue
 
           "dest-uri"          = "amqps://${urlencode(var.admin_username)}:${urlencode(var.admin_password)}@${local.central_amqps_host}/${urlencode(each.value.vhost)}?verify=verify_none"
           "dest-exchange"     = each.value.performance.exchange
-          "dest-exchange-key" = (can(each.value.performance.queues)
-            ? lookup(each.value.performance.queues[0], "routing_key", lookup(each.value.performance, "routing_key", "#"))
-            : lookup(each.value.performance, "routing_key", "#"))
+          "dest-exchange-key" = can(each.value.performance.queues) ? lookup(each.value.performance.queues[0], "routing_key", lookup(each.value.performance, "routing_key", "#")) : lookup(each.value.performance, "routing_key", "#")
 
           "ack-mode"        = "on-confirm"
           "reconnect-delay" = 5
@@ -304,15 +292,11 @@ resource "local_file" "site_definitions" {
           # Source is the central AWS broker, commands exchange in the site's vhost
           "src-uri"          = "amqps://${urlencode(var.admin_username)}:${urlencode(var.admin_password)}@${local.central_amqps_host}/${urlencode(each.value.vhost)}?verify=verify_none"
           "src-exchange"     = each.value.commands.exchange
-          "src-exchange-key" = (can(each.value.commands.queues)
-            ? lookup(each.value.commands.queues[0], "routing_key", lookup(each.value.commands, "routing_key", "#"))
-            : lookup(each.value.commands, "routing_key", "#"))
+          "src-exchange-key" = can(each.value.commands.queues) ? lookup(each.value.commands.queues[0], "routing_key", lookup(each.value.commands, "routing_key", "#")) : lookup(each.value.commands, "routing_key", "#")
 
           # Destination is the local site broker, commands.from-aws queue on /
           "dest-uri"   = "amqp://${urlencode(var.site_username)}:${urlencode(var.site_password)}@localhost:5672/%2F"
-          "dest-queue" = (can(each.value.commands.queues)
-            ? each.value.commands.queues[0].name
-            : each.value.commands.queue)
+          "dest-queue" = can(each.value.commands.queues) ? each.value.commands.queues[0].name : each.value.commands.queue
 
           "ack-mode"        = "on-confirm"
           "reconnect-delay" = 5
