@@ -1,319 +1,232 @@
-# terraform-aws-amazon-mq
+# Aurora Terraform Module – Project Houston
 
-This is a Terraform module and cannot stand on its own. It is meant to be included into a project as a module (or published to the Terraform Registry).
+This Terraform module provisions an **Amazon Aurora** database cluster for Project Houston, including networking, encryption, performance tuning, and optional event notifications.
 
-This module deploys an **Amazon MQ (RabbitMQ)** broker for a central site and supports:
+It is designed to be called from a root module that already creates:
 
-* A multi-AZ RabbitMQ cluster in your VPC
-* An associated security group
-* An optional Route 53 private hosted zone
-* Per-site RabbitMQ configuration driven by JSON files in `site-configs/` (exchanges, queues, bindings, and shovels)
-
-Most **guard-rails** (VPC/subnet selection, instance type checks, etc.) are expected to live in the *root* Terraform project that imports this module. This module still validates that required inputs are present and uses `configure_rabbitmq.sh` / `configure_rabbitmq.py` to apply per-site configuration to the broker.
+* A VPC
+* Private subnets for database instances
+* Any application EC2 instances that will connect to Aurora
 
 ---
 
-## Table of Contents
+## Features
 
-* [Configuration](#configuration)
-* [Using this module](#using-this-module)
-* [Module Variables](#module-variables)
+This module creates:
 
-  * [Core & Network Variables](#core--network-variables)
-  * [RabbitMQ Credentials](#rabbitmq-credentials)
-  * [DNS / Hosted Zone](#dns--hosted-zone)
-* [Site Configs (per-site JSON)](#site-configs-per-site-json)
+* **Security Group** for Aurora
 
-  * [Schema](#schema)
-  * [Example site config](#example-site-config)
-* [Outputs](#outputs)
+  * Inbound PostgreSQL port (5432) from the VPC CIDR and optional additional CIDR blocks
+* **DB Subnet Group**
+
+  * Uses two subnets for high availability across AZs
+* **Aurora DB Cluster**
+
+  * Supports `aurora-postgresql` and `aurora-mysql`
+  * Configurable engine version
+  * Encrypted storage with optional KMS CMK
+  * Backups and maintenance windows
+  * Optional final snapshot on deletion
+  * Optional Data API (HTTP endpoint)
+* **Aurora Cluster Instances**
+
+  * N instances (configurable count and instance class)
+  * Optional Performance Insights with configurable retention and KMS key
+* **Optional Event Notifications**
+
+  * SNS topic
+  * Email subscription
+  * RDS event subscription filtered on the Aurora cluster
 
 ---
 
-## Configuration
-
-Configuration is typically done in the **root project** using `terraform.tfvars` (or equivalent). In the root:
-
-1. **Re-declare** this module’s variables in your root `variables.tf` (optionally with a prefix like `amazonmq_` if you want to differentiate them there).
-2. **Wire** those root variables into this module in `main.tf`.
-
-> Example naming convention:
->
-> * Root variable: `variable "amazonmq_engine_version" { ... }`
-> * Module call: `engine_version = var.amazonmq_engine_version`
-
----
-
-## Using this module
-
-Example usage in your root `main.tf`:
+## Example Usage
 
 ```hcl
-module "amazon_mq" {
-  source = "git::https://github.com/hammerspace-solutions/terraform-aws-amazon-mq.git?ref=v1.0.0"
+module "aurora" {
+  source = "./modules/aurora"
 
-  project_name = "houston"
-  region       = "us-east-1"
+  project_name = "projecthouston"
+  region       = "us-west-2"
 
-  # Network (existing VPC)
-  vpc_id      = var.amazonmq_vpc_id
-  subnet_1_id = var.amazonmq_private_subnet_1_id
-  subnet_2_id = var.amazonmq_private_subnet_2_id
+  vpc_id      = module.network.vpc_id
+  subnet_1_id = module.network.private_subnet_ids[0]
+  subnet_2_id = module.network.private_subnet_ids[1]
 
-  # RabbitMQ broker configuration
-  engine_version = var.amazonmq_engine_version   # e.g. "3.13"
-  instance_type  = var.amazonmq_instance_type    # e.g. "mq.m5.large"
+  # Optional: extra CIDR blocks that can reach Aurora
+  allowed_source_cidr_blocks = [
+    "10.10.0.0/16",  # corporate VPN
+  ]
 
-  # Central broker admin credentials
-  admin_username = var.amazonmq_admin_username
-  admin_password = var.amazonmq_admin_password
+  engine         = "aurora-postgresql"
+  engine_version = "15.3"
+  instance_class = "db.r6g.large"
+  instance_count = 2
 
-  # Site broker admin credentials (used in shovels & site definitions)
-  site_username       = var.amazonmq_site_admin_username
-  site_password       = var.amazonmq_site_admin_password
-  site_password_hash  = var.amazonmq_site_admin_password_hash
+  db_name         = "projecthouston"
+  master_username = "houston_admin"
+  master_password = var.aurora_master_password
 
-  # Optional Route 53 private hosted zone
-  hosted_zone_name = var.amazonmq_hosted_zone_name # e.g. "rabbit.internal.example.com"
+  backup_retention_days        = 7
+  preferred_backup_window      = "04:00-05:00"
+  preferred_maintenance_window = "sun:06:00-sun:07:00"
 
-  tags = var.common_tags
-}
-```
+  deletion_protection = true
+  storage_encrypted   = true
+  kms_key_id          = "" # use default AWS-managed KMS key
 
-The root project is responsible for:
+  skip_final_snapshot       = true
+  final_snapshot_identifier = "" # ignored when skip_final_snapshot = true
 
-* Ensuring `vpc_id` and `subnet_*_id` refer to valid subnets in the selected region
-* Passing in secure credentials (e.g. via TF Cloud variables, SSM Parameter Store, etc.)
-* Optionally providing `hosted_zone_name` if you want a private DNS name for the broker
+  enable_performance_insights          = true
+  performance_insights_retention_period = 7
+  performance_insights_kms_key_id       = ""
 
----
+  enable_http_endpoint = false
 
-## Module Variables
+  # Optional: enable event notifications by providing an email
+  event_email = "dba-team@example.com"
 
-### Core & Network Variables
-
-These are the **module’s** variable names (from `variables.tf` in this repo):
-
-* `project_name` (string)
-  Human-readable project name. Used in tags and resource names.
-
-* `region` (string)
-  AWS region in which to create the Amazon MQ broker.
-
-* `vpc_id` (string)
-  Existing VPC ID where the broker and security group will be created.
-
-* `subnet_1_id` (string)
-  First subnet ID (private) used by the Amazon MQ multi-AZ deployment.
-
-* `subnet_2_id` (string)
-  Second subnet ID (private) used by the Amazon MQ multi-AZ deployment.
-
-* `tags` (map(string))
-  Common tags applied to all resources.
-
-### RabbitMQ Credentials
-
-* `engine_version` (string, default `"3.13"`)
-  RabbitMQ engine version for Amazon MQ.
-
-* `instance_type` (string, default `"mq.m5.large"`)
-  Amazon MQ RabbitMQ broker instance type.
-
-* `admin_username` (string, sensitive)
-  Initial **central broker** admin username (for the Amazon MQ console & shovels).
-
-* `admin_password` (string, sensitive)
-  Initial **central broker** admin password.
-
-* `site_username` (string, sensitive)
-  Admin username on the **site RabbitMQ containers** (remote sites).
-
-* `site_password` (string, sensitive)
-  Password for the site admin user.
-
-* `site_password_hash` (string, sensitive)
-  Precomputed RabbitMQ password hash for the site admin user
-  (used inside the generated `*-definitions.json` for site brokers).
-
-### DNS / Hosted Zone
-
-* `hosted_zone_name` (string, default `""`)
-  If non-empty, a **Route 53 private hosted zone** is created and associated with the given `vpc_id`.
-  The broker name and other records can be created under this zone.
-
----
-
-## Site Configs (per-site JSON)
-
-This module can read **per-site JSON config files** from:
-
-```text
-site-configs/*.json
-```
-
-and use them to:
-
-* Configure **exchanges / queues / bindings** on the **site** brokers
-* Generate per-site `*-definitions.json` files in `dist/`
-* Create **shovels** between each remote **site broker** and the **central Amazon MQ broker**
-
-These JSON files are *not* Terraform variables; they are read from disk by:
-
-* Terraform’s `local_file.site_definitions` (to generate RabbitMQ definitions JSON)
-* `scripts/configure_rabbitmq.sh` / `scripts/configure_rabbitmq.py`
-  (to push config into the central broker via its HTTP API)
-
-### Schema
-
-Each site config describes:
-
-* A **vhost** name on the **central** broker
-* For each category (`telemetry`, `events`, `performance`, `commands`):
-
-  * One exchange
-  * One or more queues bound to that exchange
-
-Schema (shown here as JSON with comments for documentation):
-
-```jsonc
-{
-  // Top-level vhost name on the CENTRAL broker
-  "vhost": "<central-vhost-name>",
-
-  // Category blocks (telemetry, events, performance, commands)
-  //
-  // Each block has:
-  //   "exchange": "<exchange-name>",
-  //   "queues": [
-  //     {
-  //       "name": "<queue-name>",
-  //       "routing_key": "<routing-key-pattern>"
-  //     },
-  //     ...
-  //   ]
-  //
-  // The Python configurator will:
-  //   - ensure the vhost exists
-  //   - create the exchange (type=topic, durable)
-  //   - create each queue (durable)
-  //   - create bindings exchange -> queue with the given routing_key
-
-  "telemetry": {
-    "exchange": "telemetry",
-    "queues": [
-      {
-        "name": "hammerspace.to-aws",
-        "routing_key": "hammerspace.#"
-      },
-      {
-        "name": "catalog.to-aws",
-        "routing_key": "catalog.#"
-      }
-    ]
-  },
-
-  "events": {
-    "exchange": "events",
-    "queues": [
-      {
-        "name": "events.to-aws",
-        "routing_key": "#"
-      }
-    ]
-  },
-
-  "performance": {
-    "exchange": "performance",
-    "queues": [
-      {
-        "name": "performance.to-aws",
-        "routing_key": "#"
-      }
-    ]
-  },
-
-  "commands": {
-    "exchange": "commands",
-    "queues": [
-      {
-        "name": "hammerspace.from-aws",
-        "routing_key": "hammerspace.#"
-      },
-      {
-        "name": "catalog.from-aws",
-        "routing_key": "catalog.#"
-      }
-    ]
+  tags = {
+    Project     = "ProjectHouston"
+    Environment = "dev"
+    Owner       = "PlatformTeam"
   }
 }
 ```
 
-> **Important:**
-> The real `*.json` files used by Terraform/Python must be **pure JSON** — no comments.
-> You can keep a commented version as `site.json.example` and strip comments when creating the real files.
+---
 
-### How the scripts use this
+## Inputs
 
-* `scripts/configure_rabbitmq.sh`
+| Name                         | Type           | Default | Required | Description                                                                              |
+| ---------------------------- | -------------- | ------- | -------- | ---------------------------------------------------------------------------------------- |
+| `project_name`               | `string`       | n/a     | **Yes**  | Project name for tagging and resource naming.                                            |
+| `region`                     | `string`       | n/a     | **Yes**  | AWS region for the Aurora cluster.                                                       |
+| `vpc_id`                     | `string`       | n/a     | **Yes**  | VPC ID in which to place the Aurora resources.                                           |
+| `subnet_1_id`                | `string`       | `null`  | **Yes**  | First subnet ID for the Aurora DB subnet group.                                          |
+| `subnet_2_id`                | `string`       | `null`  | **Yes**  | Second subnet ID for the Aurora DB subnet group.                                         |
+| `vpc_cidr_block`             | `string`       | `null`  | No       | Primary VPC CIDR. (Currently not used; VPC CIDR is looked up via data source.)           |
+| `allowed_source_cidr_blocks` | `list(string)` | `[]`    | No       | Additional IPv4 CIDR blocks allowed to connect to Aurora (e.g., corporate VPN, bastion). |
+| `tags`                       | `map(string)`  | `{}`    | No       | Common tags applied to all Aurora resources.                                             |
 
-  * Creates a Python virtualenv (`.venv` under the module)
-  * Installs `requests` (from `requirements.txt`)
-  * Invokes `configure_rabbitmq.py` with:
+### Engine & Sizing
 
-    * `--base-url` pointing to the central broker console URL
-    * `--user` / `--password` from `admin_username` / `admin_password`
-    * `--config-b64` with the site config as base64-encoded JSON
+| Name              | Type     | Default               | Required | Description                                                   |
+| ----------------- | -------- | --------------------- | -------- | ------------------------------------------------------------- |
+| `engine`          | `string` | `"aurora-postgresql"` | No       | Aurora engine: `aurora-postgresql` or `aurora-mysql`.         |
+| `engine_version`  | `string` | `"15.3"`              | No       | Aurora engine version. If empty, AWS chooses a default.       |
+| `instance_class`  | `string` | `"db.r6g.large"`      | No       | Aurora instance class (e.g., `db.r6g.large`, `db.r7g.large`). |
+| `instance_count`  | `number` | `2`                   | No       | Number of Aurora instances in the cluster (must be ≥ 1).      |
+| `db_name`         | `string` | `"projecthouston"`    | No       | Initial database name in the Aurora cluster.                  |
+| `master_username` | `string` | n/a                   | **Yes**  | Master username for Aurora.                                   |
+| `master_password` | `string` | n/a                   | **Yes**  | Master password for Aurora (sensitive).                       |
 
-* `scripts/configure_rabbitmq.py`
+### Durability, Backups, Maintenance
 
-  * Decodes the config
-  * Ensures the vhost exists
-  * For each block (`telemetry`, `events`, `performance`, `commands`):
+| Name                           | Type     | Default                 | Required | Description                                                                                                        |
+| ------------------------------ | -------- | ----------------------- | -------- | ------------------------------------------------------------------------------------------------------------------ |
+| `backup_retention_days`        | `number` | `7`                     | No       | Automated backup retention period (in days).                                                                       |
+| `preferred_backup_window`      | `string` | `"04:00-05:00"`         | No       | Preferred backup window (UTC), e.g., `04:00-05:00`.                                                                |
+| `preferred_maintenance_window` | `string` | `"sun:06:00-sun:07:00"` | No       | Preferred maintenance window (UTC), e.g., `sun:06:00-sun:07:00`.                                                   |
+| `deletion_protection`          | `bool`   | `true`                  | No       | Enables deletion protection on the Aurora cluster.                                                                 |
+| `storage_encrypted`            | `bool`   | `true`                  | No       | Enables storage encryption for the Aurora cluster.                                                                 |
+| `kms_key_id`                   | `string` | `""`                    | No       | KMS key ID/ARN for storage encryption. If empty and `storage_encrypted = true`, the AWS default KMS key is used.   |
+| `skip_final_snapshot`          | `bool`   | `true`                  | No       | Whether to skip creating a final snapshot when destroying the Aurora cluster.                                      |
+| `final_snapshot_identifier`    | `string` | `""`                    | No       | Identifier for the final snapshot when destroying the cluster. Must be non-empty if `skip_final_snapshot = false`. |
 
-    * Creates the exchange (type `topic`, durable)
-    * Creates each queue under that exchange
-    * Creates the bindings using the specified `routing_key`
+> **Validation**: When `skip_final_snapshot` is `false`, `final_snapshot_identifier` must be a non-empty string.
+
+### Performance Insights
+
+| Name                                    | Type     | Default | Required | Description                                                               |
+| --------------------------------------- | -------- | ------- | -------- | ------------------------------------------------------------------------- |
+| `enable_performance_insights`           | `bool`   | `true`  | No       | Enables Performance Insights for Aurora instances.                        |
+| `performance_insights_retention_period` | `number` | `7`     | No       | Performance Insights retention period in days (e.g., `7`, `731`, `1095`). |
+| `performance_insights_kms_key_id`       | `string` | `""`    | No       | KMS key ID/ARN for Performance Insights (optional).                       |
+
+### HTTP Data API
+
+| Name                   | Type   | Default | Required | Description                                                                                      |
+| ---------------------- | ------ | ------- | -------- | ------------------------------------------------------------------------------------------------ |
+| `enable_http_endpoint` | `bool` | `false` | No       | Enables the Aurora Data API (HTTP endpoint) for the cluster. Useful for serverless/batch access. |
+
+### Event Notifications
+
+| Name          | Type     | Default | Required | Description                                                                             |
+| ------------- | -------- | ------- | -------- | --------------------------------------------------------------------------------------- |
+| `event_email` | `string` | `""`    | No       | Email address to receive Aurora/RDS events. If blank, no event subscription is created. |
 
 ---
 
 ## Outputs
 
-After a successful `apply`, this module provides the following outputs
-(see `outputs.tf`). Sensitive values are redacted in Terraform CLI
-and can be viewed with:
+| Name                       | Sensitive | Description                                                             |
+| -------------------------- | --------- | ----------------------------------------------------------------------- |
+| `aurora_cluster_id`        | Yes       | ID of the Aurora cluster.                                               |
+| `aurora_cluster_arn`       | Yes       | ARN of the Aurora cluster.                                              |
+| `aurora_cluster_endpoint`  | No        | **Writer endpoint** for the Aurora cluster (use for reads and writes).  |
+| `aurora_reader_endpoint`   | No        | **Reader endpoint** for the Aurora cluster (use for read-only traffic). |
+| `aurora_security_group_id` | No        | Security group ID for Aurora.                                           |
+| `aurora_subnet_group_name` | Yes       | DB subnet group name used by Aurora.                                    |
 
-```bash
-terraform output <output_name>
-```
+---
 
-* `amazonmq_broker_id` (sensitive)
-  ID of the Amazon MQ RabbitMQ broker.
+## Networking & Access
 
-* `amazonmq_broker_arn` (sensitive)
-  ARN of the Amazon MQ RabbitMQ broker.
+* The module creates a security group that:
 
-* `amazonmq_security_group_id` (sensitive)
-  Security group ID attached to the RabbitMQ broker.
+  * Allows inbound TCP/5432 from:
 
-* `amazonmq_amqps_endpoint`
-  Primary **AMQPS** endpoint for the RabbitMQ broker
-  (this is what your shovels will generally use).
+    * The VPC CIDR (determined via `data.aws_vpc.this.cidr_block`)
+    * Any CIDR blocks listed in `allowed_source_cidr_blocks`
+  * Allows outbound traffic to `0.0.0.0/0` (typical for RDS connectivity to AWS services).
 
-* `amazonmq_console_url`
-  Web management console URL for the broker.
+* You should attach this security group ID to:
 
-* `hosted_zone_id`
-  ID of the Route 53 private hosted zone created for this broker
-  (only set if `hosted_zone_name` was non-empty).
+  * Application EC2 instances (or their security groups) that need to connect to Aurora.
+  * Any bastion hosts used for admin/debug access.
 
-Example output:
+---
 
-```text
-amazonmq_broker_id          = <sensitive>
-amazonmq_amqps_endpoint     = "amqps://b-ece8a874-0fad-43a9-8f1e-cd14ac60939b.mq.us-east-1.on.aws:5671"
-amazonmq_broker_arn         = <sensitive>
-amazonmq_console_url        = "https://b-ece8a874-0fad-43a9-8f1e-cd14ac60939b.mq.us-east-1.on.aws"
-hosted_zone_id              = "Z04378071RO6F29EWR5NS"
-amazonmq_security_group_id  = <sensitive>
-```
+## Event Notifications Behavior
+
+If `event_email` is **non-empty**:
+
+1. An SNS topic named `${project_name}-aurora-events` is created.
+2. An email subscription to that SNS topic is created for `event_email`.
+3. An `aws_db_event_subscription` is created and associated with the Aurora **cluster**, configured with event categories like:
+
+   * `availability`
+   * `backup`
+   * `configuration change`
+   * `failure`
+   * `maintenance`
+
+The exact event categories can be adjusted in `aurora_main.tf` depending on your operational needs.
+
+If `event_email` is empty, **no SNS topic or event subscription** resources are created.
+
+---
+
+## Notes & Recommendations
+
+* **Writer vs Reader endpoint**
+
+  * `aurora_cluster_endpoint` always points to the **primary** instance; use it for writes and strongly consistent reads.
+  * `aurora_reader_endpoint` load-balances across **read replicas**; use it for read-only traffic where slightly stale data is acceptable.
+
+* **Final snapshots**
+
+  * For production environments, consider setting `skip_final_snapshot = false` and providing a unique `final_snapshot_identifier` to avoid losing data on destroy.
+
+* **Encryption**
+
+  * Default is encrypted storage with the AWS-managed KMS key.
+  * For stricter security/posture requirements, provide your own CMK via `kms_key_id`.
+
+* **Tagging**
+
+  * Use the `tags` input to ensure all Aurora resources are tagged for cost allocation, ownership, and environment tracking.
+
+---
